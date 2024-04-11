@@ -5,8 +5,12 @@ terraform {
       version = "~> 5.16"
     }
     tls = {
-      source = "hashicorp/tls"
+      source  = "hashicorp/tls"
       version = "~> 4.0.5"
+    }
+    local = {
+      source = "hashicorp/local"
+      version = "~> 2.5.1"
     }
   }
 
@@ -14,7 +18,7 @@ terraform {
 }
 
 provider "aws" {
-  region  = "ap-northeast-2"
+  region = "ap-northeast-2"
 }
 
 resource "aws_vpc" "dev_vpc" {
@@ -25,9 +29,9 @@ resource "aws_vpc" "dev_vpc" {
 }
 
 resource "aws_subnet" "dev_sbn_a" {
-  vpc_id     = aws_vpc.dev_vpc.id
+  vpc_id            = aws_vpc.dev_vpc.id
   availability_zone = "ap-northeast-2a"
-  cidr_block = "172.20.167.128/27"
+  cidr_block        = "172.20.167.128/27"
 
   tags = {
     Name = "dev-sbn-a"
@@ -35,9 +39,9 @@ resource "aws_subnet" "dev_sbn_a" {
 }
 
 resource "aws_subnet" "dev_sbn_c" {
-  vpc_id     = aws_vpc.dev_vpc.id
+  vpc_id            = aws_vpc.dev_vpc.id
   availability_zone = "ap-northeast-2c"
-  cidr_block = "172.20.167.160/27"
+  cidr_block        = "172.20.167.160/27"
 
   tags = {
     Name = "dev-sbn-c"
@@ -103,14 +107,14 @@ resource "aws_iam_role_policy_attachment" "eks_cni_policy" {
 resource "aws_eks_cluster" "dev_eks" {
   name     = "dev-eks"
   role_arn = aws_iam_role.eks_cluster_role.arn
-  version = "1.28"
+  version  = "1.28"
 
   access_config {
     authentication_mode = "API_AND_CONFIG_MAP"
   }
 
   vpc_config {
-    subnet_ids = [aws_subnet.dev_sbn_a.id, aws_subnet.dev_sbn_c.id]
+    subnet_ids             = [aws_subnet.dev_sbn_a.id, aws_subnet.dev_sbn_c.id]
     endpoint_public_access = true
   }
 
@@ -161,3 +165,84 @@ resource "aws_iam_openid_connect_provider" "dev_eks_oidc_identity_provider" {
 /*
   EKS Node Group
 */
+resource "tls_private_key" "dev_key" {
+  algorithm = "RSA"
+  rsa_bits  = 4096
+}
+
+resource "aws_key_pair" "dev_kp_eksng" {
+  key_name   = "dev_kp_eksng"
+  public_key = tls_private_key.dev_key.public_key_openssh
+}
+
+resource "local_file" "dev_key_file" {
+  filename        = "${path.module}/keypairs/dev_kp.pem"
+  content         = tls_private_key.dev_key.private_key_pem
+  file_permission = "0600"
+}
+
+resource "aws_security_group" "dev_sg_eksng" {
+  name = "dev_sg_eksng"
+  vpc_id = aws_vpc.dev_vpc.id
+}
+
+resource "aws_vpc_security_group_ingress_rule" "allow_eks_control_plane" {
+  security_group_id = aws_security_group.dev_sg_eksng.id
+  ip_protocol = -1
+  referenced_security_group_id = aws_eks_cluster.dev_eks.vpc_config[0].cluster_security_group_id
+  description = "eks control plane"
+}
+
+resource "aws_vpc_security_group_ingress_rule" "allow_eks_nodes" {
+  security_group_id = aws_security_group.dev_sg_eksng.id
+  ip_protocol = -1
+  referenced_security_group_id = aws_security_group.dev_sg_eksng.id
+  description = "eks nodes"
+}
+
+resource "aws_vpc_security_group_egress_rule" "allow_all" {
+  security_group_id = aws_security_group.dev_sg_eksng.id
+  ip_protocol = -1
+  cidr_ipv4 = "0.0.0.0/0"
+}
+
+resource "aws_launch_template" "dev_lt_eksng" {
+  name          = "dev_lt_eksng"
+  instance_type = "t3a.medium"
+  key_name      = aws_key_pair.dev_kp_eksng.key_name
+  vpc_security_group_ids = [aws_security_group.dev_sg_eksng.id]
+  block_device_mappings {
+    device_name = "/dev/xvda"
+
+    ebs {
+      volume_size = 20
+    }
+  }
+}
+
+# resource "aws_eks_node_group" "dev_eksng" {
+#   cluster_name = aws_eks_cluster.dev_eks.name
+#   node_group_name = "dev_eksng"
+#   node_role_arn = aws_iam_role.eks_node_role.arn
+#   subnet_ids = [aws_subnet.dev_sbn_a.id, aws_subnet.dev_sbn_c.id]
+
+#   scaling_config {
+#     desired_size = 1
+#     max_size = 3
+#     min_size = 0
+#   }
+
+#   update_config {
+#     max_unavailable = 1
+#   }
+
+#   depends_on = [ 
+#     aws_iam_role_policy_attachment.eks_worker_node_policy,
+#     aws_iam_role_policy_attachment.ec2_container_registry_read_only,
+#     aws_iam_role_policy_attachment.eks_cni_policy,
+#    ]
+
+#    lifecycle {
+#     ignore_changes = [scaling_config[0].desired_size]
+#   }
+# }
