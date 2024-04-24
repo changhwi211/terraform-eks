@@ -23,6 +23,7 @@ provider "aws" {
 
 resource "aws_vpc" "dev_vpc" {
   cidr_block = "172.20.167.0/24"
+  enable_dns_hostnames = true
   tags = {
     Name = "dev-vpc"
   }
