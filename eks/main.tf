@@ -21,140 +21,6 @@ provider "aws" {
   region = "ap-northeast-2"
 }
 
-resource "aws_vpc" "dev_vpc" {
-  cidr_block = "172.20.167.0/24"
-  enable_dns_hostnames = true
-  tags = {
-    Name = "dev-vpc"
-  }
-}
-
-resource "aws_subnet" "dev_sbn_pub_a" {
-  vpc_id            = aws_vpc.dev_vpc.id
-  availability_zone = "ap-northeast-2a"
-  cidr_block        = "172.20.167.64/27"
-
-  tags = {
-    Name = "dev-sbn-pub-a"
-  }
-}
-
-resource "aws_subnet" "dev_sbn_pub_c" {
-  vpc_id            = aws_vpc.dev_vpc.id
-  availability_zone = "ap-northeast-2c"
-  cidr_block        = "172.20.167.96/27"
-
-  tags = {
-    Name = "dev-sbn-pub-c"
-  }
-}
-
-resource "aws_subnet" "dev_sbn_pri_a" {
-  vpc_id            = aws_vpc.dev_vpc.id
-  availability_zone = "ap-northeast-2a"
-  cidr_block        = "172.20.167.128/27"
-
-  tags = {
-    Name = "dev-sbn-pri-a"
-  }
-}
-
-resource "aws_subnet" "dev_sbn_pri_c" {
-  vpc_id            = aws_vpc.dev_vpc.id
-  availability_zone = "ap-northeast-2c"
-  cidr_block        = "172.20.167.160/27"
-
-  tags = {
-    Name = "dev-sbn-pri-c"
-  }
-}
-
-resource "aws_internet_gateway" "dev_igw" {
-  vpc_id = aws_vpc.dev_vpc.id
-
-  tags = {
-    Name = "dev_igw"
-  }
-}
-
-resource "aws_eip" "dev_eip_natgw" {
-  network_border_group = "ap-northeast-2"
-  domain   = "vpc"
-  public_ipv4_pool = "amazon"
-  tags = {
-    Name = "dev-eip-natgw"
-  }
-}
-
-resource "aws_nat_gateway" "dev_natgw" {
-  allocation_id = aws_eip.dev_eip_natgw.id
-  subnet_id     = aws_subnet.dev_sbn_pub_a.id
-
-  tags = {
-    Name = "dev-natgw"
-  }
-
-  # To ensure proper ordering, it is recommended to add an explicit dependency
-  # on the Internet Gateway for the VPC.
-  depends_on = [aws_internet_gateway.dev_igw]
-}
-
-resource "aws_route_table" "dev_rt_pri" {
-  vpc_id = aws_vpc.dev_vpc.id
-
-  route {
-    cidr_block = "172.20.167.0/24"
-    gateway_id = "local"
-  }
-
-  route {
-    cidr_block = "0.0.0.0/0"
-    nat_gateway_id = aws_nat_gateway.dev_natgw.id
-  }
-
-  tags = {
-    Name = "dev-rt-pri"
-  }
-}
-
-resource "aws_route_table" "dev_rt_pub" {
-  vpc_id = aws_vpc.dev_vpc.id
-
-  route {
-    cidr_block = "172.20.167.0/24"
-    gateway_id = "local"
-  }
-
-  route {
-    cidr_block = "0.0.0.0/0"
-    gateway_id = aws_internet_gateway.dev_igw.id
-  }
-
-  tags = {
-    Name = "dev-rt-pub"
-  }
-}
-
-resource "aws_route_table_association" "dev-rt-pri-dev-sbn-pri-a" {
-  subnet_id      = aws_subnet.dev_sbn_pri_a.id
-  route_table_id = aws_route_table.dev_rt_pri.id
-}
-
-resource "aws_route_table_association" "dev-rt-pri-dev-sbn-pri-c" {
-  subnet_id      = aws_subnet.dev_sbn_pri_c.id
-  route_table_id = aws_route_table.dev_rt_pri.id
-}
-
-resource "aws_route_table_association" "dev-rt-pub-dev-sbn-pub-a" {
-  subnet_id      = aws_subnet.dev_sbn_pub_a.id
-  route_table_id = aws_route_table.dev_rt_pub.id
-}
-
-resource "aws_route_table_association" "dev-rt-pub-dev-sbn-pub-c" {
-  subnet_id      = aws_subnet.dev_sbn_pub_c.id
-  route_table_id = aws_route_table.dev_rt_pub.id
-}
-
 data "aws_iam_policy_document" "eks_cluster_assume_role" {
   statement {
     effect = "Allow"
@@ -222,7 +88,7 @@ resource "aws_eks_cluster" "dev_eks" {
   }
 
   vpc_config {
-    subnet_ids             = [aws_subnet.dev_sbn_pri_a.id, aws_subnet.dev_sbn_pri_c.id]
+    subnet_ids             = module.vpc.private_subnets
     endpoint_public_access = true
   }
 
@@ -296,12 +162,12 @@ resource "aws_vpc_security_group_ingress_rule" "allow_dev_eksng" {
   to_port = 443
   
   referenced_security_group_id = aws_security_group.dev_sg_eksng.id
-  description = "allow dev_eksng"
+  description = "allow dev_eksn"
 }
 
 resource "aws_security_group" "dev_sg_eksng" {
   name = "dev_sg_eksng"
-  vpc_id = aws_vpc.dev_vpc.id
+  vpc_id = module.vpc.vpc_id
 }
 
 resource "aws_vpc_security_group_ingress_rule" "allow_eks_control_plane" {
@@ -345,7 +211,7 @@ resource "aws_eks_node_group" "dev_eksng" {
   cluster_name = aws_eks_cluster.dev_eks.name
   node_group_name = "dev_eksng"
   node_role_arn = aws_iam_role.eks_node_role.arn
-  subnet_ids = [aws_subnet.dev_sbn_pri_a.id, aws_subnet.dev_sbn_pri_c.id]
+  subnet_ids = module.vpc.private_subnets
   launch_template {
     id = aws_launch_template.dev_lt_eksng.id
     version = aws_launch_template.dev_lt_eksng.default_version
