@@ -29,24 +29,130 @@ resource "aws_vpc" "dev_vpc" {
   }
 }
 
-resource "aws_subnet" "dev_sbn_a" {
+resource "aws_subnet" "dev_sbn_pub_a" {
+  vpc_id            = aws_vpc.dev_vpc.id
+  availability_zone = "ap-northeast-2a"
+  cidr_block        = "172.20.167.64/27"
+
+  tags = {
+    Name = "dev-sbn-pub-a"
+  }
+}
+
+resource "aws_subnet" "dev_sbn_pub_c" {
+  vpc_id            = aws_vpc.dev_vpc.id
+  availability_zone = "ap-northeast-2c"
+  cidr_block        = "172.20.167.96/27"
+
+  tags = {
+    Name = "dev-sbn-pub-c"
+  }
+}
+
+resource "aws_subnet" "dev_sbn_pri_a" {
   vpc_id            = aws_vpc.dev_vpc.id
   availability_zone = "ap-northeast-2a"
   cidr_block        = "172.20.167.128/27"
 
   tags = {
-    Name = "dev-sbn-a"
+    Name = "dev-sbn-pri-a"
   }
 }
 
-resource "aws_subnet" "dev_sbn_c" {
+resource "aws_subnet" "dev_sbn_pri_c" {
   vpc_id            = aws_vpc.dev_vpc.id
   availability_zone = "ap-northeast-2c"
   cidr_block        = "172.20.167.160/27"
 
   tags = {
-    Name = "dev-sbn-c"
+    Name = "dev-sbn-pri-c"
   }
+}
+
+resource "aws_internet_gateway" "dev_igw" {
+  vpc_id = aws_vpc.dev_vpc.id
+
+  tags = {
+    Name = "dev_igw"
+  }
+}
+
+resource "aws_eip" "dev_eip_natgw" {
+  network_border_group = "ap-northeast-2"
+  domain   = "vpc"
+  public_ipv4_pool = "amazon"
+  tags = {
+    Name = "dev-eip-natgw"
+  }
+}
+
+resource "aws_nat_gateway" "dev_natgw" {
+  allocation_id = aws_eip.dev_eip_natgw.id
+  subnet_id     = aws_subnet.dev_sbn_pub_a.id
+
+  tags = {
+    Name = "dev-natgw"
+  }
+
+  # To ensure proper ordering, it is recommended to add an explicit dependency
+  # on the Internet Gateway for the VPC.
+  depends_on = [aws_internet_gateway.dev_igw]
+}
+
+resource "aws_route_table" "dev_rt_pri" {
+  vpc_id = aws_vpc.dev_vpc.id
+
+  route {
+    cidr_block = "172.20.167.0/24"
+    gateway_id = "local"
+  }
+
+  route {
+    cidr_block = "0.0.0.0/0"
+    nat_gateway_id = aws_nat_gateway.dev_natgw.id
+  }
+
+  tags = {
+    Name = "dev-rt-pri"
+  }
+}
+
+resource "aws_route_table" "dev_rt_pub" {
+  vpc_id = aws_vpc.dev_vpc.id
+
+  route {
+    cidr_block = "172.20.167.0/24"
+    gateway_id = "local"
+  }
+
+  route {
+    cidr_block = "0.0.0.0/0"
+    gateway_id = aws_internet_gateway.dev_igw.id
+  }
+
+  tags = {
+    Name = "dev-rt-pub"
+  }
+}
+
+resource "aws_route_table_association" "dev-rt-pri-dev-sbn-pri-a" {
+  subnet_id      = aws_subnet.dev_sbn_pri_a.id
+  route_table_id = aws_route_table.dev_rt_pri.id
+}
+
+resource "aws_route_table_association" "dev-rt-pri-dev-sbn-pri-c" {
+  subnet_id      = aws_subnet.dev_sbn_pri_c.id
+  route_table_id = aws_route_table.dev_rt_pri.id
+}
+
+resource "aws_route_table_association" "dev-rt-pub-dev-sbn-pub-a" {
+  subnet_id      = aws_subnet.dev_sbn_pub_a.id
+  route_table_id = aws_route_table.dev_rt_pub.id
+}
+
+resource "aws_route_table_association" "dev-rt-pub-dev-sbn-pub-c" {
+  subnet_id      = aws_subnet.dev_sbn_pub_c.id
+  route_table_id = aws_route_table.dev_rt_pub.id
 }
 
 data "aws_iam_policy_document" "eks_cluster_assume_role" {
@@ -112,10 +218,11 @@ resource "aws_eks_cluster" "dev_eks" {
 
   access_config {
     authentication_mode = "API_AND_CONFIG_MAP"
+    bootstrap_cluster_creator_admin_permissions = true
   }
 
   vpc_config {
-    subnet_ids             = [aws_subnet.dev_sbn_a.id, aws_subnet.dev_sbn_c.id]
+    subnet_ids             = [aws_subnet.dev_sbn_pri_a.id, aws_subnet.dev_sbn_pri_c.id]
     endpoint_public_access = true
   }
 
@@ -128,26 +235,26 @@ resource "aws_eks_cluster" "dev_eks" {
   ]
 }
 
-# resource "aws_eks_addon" "dev_eks_addon_vpc_cni" {
-#   cluster_name                = aws_eks_cluster.dev_eks.name
-#   addon_name                  = "vpc-cni"
-#   addon_version               = "v1.18.0-eksbuild.1"
-#   resolve_conflicts_on_update = "PRESERVE"
-# }
+resource "aws_eks_addon" "dev_eks_addon_vpc_cni" {
+  cluster_name                = aws_eks_cluster.dev_eks.name
+  addon_name                  = "vpc-cni"
+  addon_version               = "v1.18.0-eksbuild.1"
+  resolve_conflicts_on_update = "OVERWRITE"
+}
 
-# resource "aws_eks_addon" "dev_eks_addon_coredns" {
-#   cluster_name                = aws_eks_cluster.dev_eks.name
-#   addon_name                  = "coredns"
-#   addon_version               = "v1.10.1-eksbuild.7"
-#   resolve_conflicts_on_update = "PRESERVE"
-# }
+resource "aws_eks_addon" "dev_eks_addon_coredns" {
+  cluster_name                = aws_eks_cluster.dev_eks.name
+  addon_name                  = "coredns"
+  addon_version               = "v1.10.1-eksbuild.7"
+  resolve_conflicts_on_update = "OVERWRITE"
+}
 
-# resource "aws_eks_addon" "dev_eks_addon_kube_proxy" {
-#   cluster_name                = aws_eks_cluster.dev_eks.name
-#   addon_name                  = "kube-proxy"
-#   addon_version               = "v1.28.6-eksbuild.2"
-#   resolve_conflicts_on_update = "PRESERVE"
-# }
+resource "aws_eks_addon" "dev_eks_addon_kube_proxy" {
+  cluster_name                = aws_eks_cluster.dev_eks.name
+  addon_name                  = "kube-proxy"
+  addon_version               = "v1.28.6-eksbuild.2"
+  resolve_conflicts_on_update = "OVERWRITE"
+}
 
 /*
   EKS OIDC Identity Providers
@@ -182,6 +289,16 @@ resource "local_file" "dev_key_file" {
   file_permission = "0600"
 }
 
+resource "aws_vpc_security_group_ingress_rule" "allow_dev_eksng" {
+  security_group_id = aws_eks_cluster.dev_eks.vpc_config[0].cluster_security_group_id
+  ip_protocol = "TCP"
+  from_port = 443
+  to_port = 443
+  
+  referenced_security_group_id = aws_security_group.dev_sg_eksng.id
+  description = "allow dev_eksng"
+}
+
 resource "aws_security_group" "dev_sg_eksng" {
   name = "dev_sg_eksng"
   vpc_id = aws_vpc.dev_vpc.id
@@ -212,6 +329,9 @@ resource "aws_launch_template" "dev_lt_eksng" {
   instance_type = "t3a.medium"
   key_name      = aws_key_pair.dev_kp_eksng.key_name
   vpc_security_group_ids = [aws_security_group.dev_sg_eksng.id]
+  
+  # default_version = 2
+  update_default_version = true
   block_device_mappings {
     device_name = "/dev/xvda"
 
@@ -221,29 +341,72 @@ resource "aws_launch_template" "dev_lt_eksng" {
   }
 }
 
-# resource "aws_eks_node_group" "dev_eksng" {
-#   cluster_name = aws_eks_cluster.dev_eks.name
-#   node_group_name = "dev_eksng"
-#   node_role_arn = aws_iam_role.eks_node_role.arn
-#   subnet_ids = [aws_subnet.dev_sbn_a.id, aws_subnet.dev_sbn_c.id]
+resource "aws_eks_node_group" "dev_eksng" {
+  cluster_name = aws_eks_cluster.dev_eks.name
+  node_group_name = "dev_eksng"
+  node_role_arn = aws_iam_role.eks_node_role.arn
+  subnet_ids = [aws_subnet.dev_sbn_pri_a.id, aws_subnet.dev_sbn_pri_c.id]
+  launch_template {
+    id = aws_launch_template.dev_lt_eksng.id
+    version = aws_launch_template.dev_lt_eksng.default_version
+  }
 
-#   scaling_config {
-#     desired_size = 1
-#     max_size = 3
-#     min_size = 0
-#   }
+  scaling_config {
+    desired_size = 1
+    max_size = 3
+    min_size = 0
+  }
 
-#   update_config {
-#     max_unavailable = 1
-#   }
+  update_config {
+    max_unavailable = 1
+  }
 
-#   depends_on = [ 
-#     aws_iam_role_policy_attachment.eks_worker_node_policy,
-#     aws_iam_role_policy_attachment.ec2_container_registry_read_only,
-#     aws_iam_role_policy_attachment.eks_cni_policy,
-#    ]
+  depends_on = [ 
+    aws_iam_role_policy_attachment.eks_worker_node_policy,
+    aws_iam_role_policy_attachment.ec2_container_registry_read_only,
+    aws_iam_role_policy_attachment.eks_cni_policy,
+   ]
 
-#    lifecycle {
-#     ignore_changes = [scaling_config[0].desired_size]
-#   }
+   lifecycle {
+    ignore_changes = [scaling_config[0].desired_size]
+  }
+}
+
+/*
+  VPC Endpoint
+*/
+# resource "aws_security_group" "dev_dev_sg_vpc_ep_eks" {
+#   name = "dev_dev_sg_vpc_ep_eks"
+#   vpc_id = aws_vpc.dev_vpc.id
+# }
+
+# resource "aws_vpc_security_group_ingress_rule" "vpc_ep_eks_allow_eks_nodes" {
+#   security_group_id = aws_security_group.dev_dev_sg_vpc_ep_eks.id
+#   ip_protocol = "TCP"
+#   from_port = 443
+#   to_port = 443
+#   referenced_security_group_id = aws_security_group.dev_sg_eksng.id
+#   description = "eks nodes"
+# }
+
+# resource "aws_vpc_security_group_egress_rule" "vpc_ep_eks_allow_control_plane" {
+#   security_group_id = aws_security_group.dev_dev_sg_vpc_ep_eks.id
+#   ip_protocol = "TCP"
+#   from_port = 443
+#   to_port = 443
+#   referenced_security_group_id = aws_eks_cluster.dev_eks.vpc_config[0].cluster_security_group_id
+# }
+
+# resource "aws_vpc_endpoint" "dev_vpc_ep_eks" {
+#   vpc_id = aws_vpc.dev_vpc.id
+#   service_name = "com.amazonaws.ap-northeast-2.eks"
+#   vpc_endpoint_type = "Interface"
+
+#   security_group_ids = [
+#     aws_security_group.dev_dev_sg_vpc_ep_eks.id,
+#   ]
+
+#   subnet_ids = [aws_subnet.dev_sbn_pri_a.id, aws_subnet.dev_sbn_pri_c.id]
+
+#   private_dns_enabled = true
 # }
